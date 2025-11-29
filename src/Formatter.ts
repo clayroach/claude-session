@@ -203,22 +203,40 @@ const formatMetadataMarkdown = (
 // Markdown Formatter
 // ============================================================================
 
+/**
+ * Check if a message has displayable content
+ */
+const hasDisplayableContent = (msg: NormalizedMessage, options: FormatOptions): boolean => {
+  // Has text content
+  if (msg.content.trim().length > 0) return true
+  // Has tool uses and we're showing them
+  if (options.includeToolUse && msg.toolUses.length > 0) return true
+  // Has tool results and we're showing them
+  if (options.includeToolUse && msg.toolResults.length > 0) return true
+  return false
+}
+
 const formatToMarkdown = (
   session: Session,
   options: FormatOptions
 ): string => {
   let output = ""
-  
+
   if (options.includeMetadata) {
     output += formatMetadataMarkdown(session.metadata, options.title)
   }
-  
-  session.messages.forEach((msg, index) => {
+
+  // Filter to only messages with displayable content
+  const displayableMessages = session.messages.filter(msg =>
+    hasDisplayableContent(msg, options)
+  )
+
+  displayableMessages.forEach((msg, index) => {
     output += formatMessageMarkdown(msg, index, options)
   })
-  
+
   output += `\n*Exported by @effect/claude-session on ${new Date().toISOString()}*\n`
-  
+
   return output
 }
 
@@ -247,29 +265,34 @@ const formatToJson = (
   session: Session,
   options: FormatOptions
 ): string => {
+  // Filter to only messages with displayable content
+  const displayableMessages = session.messages.filter(msg =>
+    hasDisplayableContent(msg, options)
+  )
+
   const exportData: JsonExport = {
     metadata: {
       sessionId: session.metadata.id,
       project: session.metadata.projectName,
       lastModified: session.metadata.lastModified.toISOString(),
-      messageCount: session.messages.length,
+      messageCount: displayableMessages.length,
       exportedAt: new Date().toISOString()
     },
-    messages: session.messages.map(msg => ({
+    messages: displayableMessages.map(msg => ({
       role: msg.role,
       content: truncateContent(msg.content, options.maxContentLength),
-      timestamp: Option.isSome(msg.timestamp) 
-        ? msg.timestamp.value.toISOString() 
+      timestamp: Option.isSome(msg.timestamp)
+        ? msg.timestamp.value.toISOString()
         : null,
-      ...(options.includeToolUse && msg.toolUses.length > 0 
-        ? { toolUses: msg.toolUses } 
+      ...(options.includeToolUse && msg.toolUses.length > 0
+        ? { toolUses: msg.toolUses }
         : {}),
-      ...(options.includeToolUse && msg.toolResults.length > 0 
-        ? { toolResults: msg.toolResults } 
+      ...(options.includeToolUse && msg.toolResults.length > 0
+        ? { toolResults: msg.toolResults }
         : {})
     }))
   }
-  
+
   return JSON.stringify(exportData, null, 2)
 }
 
@@ -282,8 +305,13 @@ const formatToHtml = (
   options: FormatOptions
 ): string => {
   const title = Option.getOrElse(options.title, () => session.metadata.projectName)
-  
-  const messagesHtml = session.messages.map((msg, index) => {
+
+  // Filter to only messages with displayable content
+  const displayableMessages = session.messages.filter(msg =>
+    hasDisplayableContent(msg, options)
+  )
+
+  const messagesHtml = displayableMessages.map((msg, index) => {
     const roleClass = msg.role === "user" ? "user" : "assistant"
     const emoji = msg.role === "user" ? "👤" : "🤖"
     const roleName = msg.role === "user" ? "User" : "Claude"
@@ -430,7 +458,7 @@ const formatToHtml = (
         </div>
         <div class="metadata-item">
           <label>Messages</label>
-          <span>${session.messages.length}</span>
+          <span>${displayableMessages.length}</span>
         </div>
       </div>
       ` : ""}
