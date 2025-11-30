@@ -33,6 +33,9 @@ if [ -n "$GIST_LINE" ]; then
   # Add blank line and trailer to commit message
   echo "" >> "$COMMIT_MSG_FILE"
   echo "$GIST_LINE" >> "$COMMIT_MSG_FILE"
+
+  # Save gist URL to temp file for post-commit hook
+  echo "$GIST_LINE" > /tmp/claude-session-gist-url
 fi
 
 exit 0

@@ -388,12 +388,160 @@ const hookCommand = Command.make(
 )
 
 // ============================================================================
+// Link Commit Command (for post-commit hook)
+// ============================================================================
+
+const gistUrlOption = Options.text("gist").pipe(
+  Options.withAlias("g"),
+  Options.withDescription("Gist URL or ID to update")
+)
+
+const repoOption = Options.text("repo").pipe(
+  Options.withAlias("r"),
+  Options.withDescription("GitHub repository (owner/repo) for commit links"),
+  Options.optional
+)
+
+/**
+ * Get commit info from git
+ */
+const getCommitInfo = Effect.gen(function* () {
+  const shaCommand = PlatformCommand.make("git", "rev-parse", "HEAD")
+  const sha = yield* PlatformCommand.string(shaCommand).pipe(
+    Effect.map(s => s.trim()),
+    Effect.catchAll(() => Effect.succeed(""))
+  )
+
+  const messageCommand = PlatformCommand.make("git", "log", "-1", "--format=%B")
+  const message = yield* PlatformCommand.string(messageCommand).pipe(
+    Effect.map(s => s.trim()),
+    Effect.catchAll(() => Effect.succeed(""))
+  )
+
+  const branchCommand = PlatformCommand.make("git", "rev-parse", "--abbrev-ref", "HEAD")
+  const branch = yield* PlatformCommand.string(branchCommand).pipe(
+    Effect.map(s => s.trim()),
+    Effect.catchAll(() => Effect.succeed(""))
+  )
+
+  // Try to get remote URL for repo info
+  const remoteCommand = PlatformCommand.make("git", "remote", "get-url", "origin")
+  const remoteUrl = yield* PlatformCommand.string(remoteCommand).pipe(
+    Effect.map(s => s.trim()),
+    Effect.catchAll(() => Effect.succeed(""))
+  )
+
+  // Parse repo from remote URL (handles both https and ssh formats)
+  let repo = ""
+  const httpsMatch = remoteUrl.match(/github\.com\/([^/]+\/[^/.]+)/)
+  const sshMatch = remoteUrl.match(/github\.com:([^/]+\/[^/.]+)/)
+  if (httpsMatch) repo = httpsMatch[1]!
+  else if (sshMatch) repo = sshMatch[1]!
+
+  return { sha, message, branch, repo }
+})
+
+/**
+ * Create commit info block to prepend to gist
+ */
+const createCommitInfoBlock = (
+  sha: string,
+  message: string,
+  branch: string,
+  repo: string
+): string => {
+  const shortSha = sha.substring(0, 7)
+  const commitUrl = repo ? `https://github.com/${repo}/commit/${sha}` : ""
+  const commitLink = commitUrl ? `[${shortSha}](${commitUrl})` : shortSha
+
+  // Extract just the first line of commit message
+  const firstLine = message.split("\n")[0] || message
+
+  return `> **Commit:** ${commitLink}
+> **Branch:** ${branch}
+> **Message:** ${firstLine}
+
+---
+
+`
+}
+
+const linkCommitCommand = Command.make(
+  "link-commit",
+  {
+    gist: gistUrlOption,
+    repo: repoOption
+  },
+  ({ gist, repo }) =>
+    Effect.gen(function* () {
+      const gistService = yield* GistService
+
+      // Extract gist ID from URL or use as-is
+      const gistId = gist.includes("/") ? gist.split("/").pop()! : gist
+
+      // Get commit info
+      const commitInfo = yield* getCommitInfo
+      const effectiveRepo = Option.getOrElse(repo, () => commitInfo.repo)
+
+      if (!commitInfo.sha) {
+        yield* Console.error("No commit found")
+        return
+      }
+
+      // Get the filename from the gist
+      const filesCommand = PlatformCommand.make("gh", "gist", "view", gistId, "--files")
+      const filename = yield* PlatformCommand.string(filesCommand).pipe(
+        Effect.map(s => s.trim().split("\n")[0] || "session.md"),
+        Effect.catchAll(() => Effect.succeed("session.md"))
+      )
+
+      // Fetch current gist content via gh CLI
+      const viewCommand = PlatformCommand.make("gh", "gist", "view", gistId, "-f", filename)
+      const currentContent = yield* PlatformCommand.string(viewCommand).pipe(
+        Effect.catchAll(() => Effect.succeed(""))
+      )
+
+      // Create commit info block and prepend
+      const commitBlock = createCommitInfoBlock(
+        commitInfo.sha,
+        commitInfo.message,
+        commitInfo.branch,
+        effectiveRepo
+      )
+
+      // Find the metadata table end (first --- after the table)
+      // The content looks like: # Title\n\n| ... |\n\n---\n\n## First message
+      const metadataEndMatch = currentContent.match(/\n---\n\n/)
+      let updatedContent: string
+      if (metadataEndMatch && metadataEndMatch.index !== undefined) {
+        const insertPos = metadataEndMatch.index + metadataEndMatch[0].length
+        updatedContent = currentContent.slice(0, insertPos) + commitBlock + currentContent.slice(insertPos)
+      } else {
+        // Fallback: prepend to content
+        updatedContent = commitBlock + currentContent
+      }
+
+      // Update the gist
+      yield* gistService.update({
+        gistId,
+        files: [{ filename, content: updatedContent }]
+      })
+
+      yield* Console.log(`Linked commit ${commitInfo.sha.substring(0, 7)} to gist ${gistId}`)
+    }).pipe(
+      Effect.catchAll((error) =>
+        Console.error(`Failed to link commit: ${error}`)
+      )
+    )
+)
+
+// ============================================================================
 // Main Command
 // ============================================================================
 
 const mainCommand = Command.make("claude-session").pipe(
   Command.withDescription("Export Claude Code sessions to GitHub Gists for decision provenance"),
-  Command.withSubcommands([listCommand, exportCommand, gistCommand, hookCommand])
+  Command.withSubcommands([listCommand, exportCommand, gistCommand, hookCommand, linkCommitCommand])
 )
 
 // ============================================================================
