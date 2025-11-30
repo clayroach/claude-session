@@ -14,7 +14,7 @@ Important design and implementation decisions happen in Claude Code conversation
 ### 1. Install Globally
 
 ```bash
-npm install -g @effect/claude-session
+pnpm add -g @effect/claude-session
 ```
 
 ### 2. Authenticate with GitHub
@@ -34,8 +34,8 @@ export GITHUB_TOKEN=ghp_your_token_here
 Install Husky in your project:
 
 ```bash
-npm install -D husky
-npx husky init
+pnpm add -D husky
+pnpm exec husky init
 ```
 
 Create `.husky/prepare-commit-msg`:
