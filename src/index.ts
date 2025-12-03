@@ -211,7 +211,25 @@ export {
    * @since 0.1.0
    */
   type GistResult,
-  
+
+  /**
+   * Gist list item type
+   * @since 0.1.0
+   */
+  type GistListItem,
+
+  /**
+   * Gist list options
+   * @since 0.1.0
+   */
+  type GistListOptions,
+
+  /**
+   * Gist content type
+   * @since 0.1.0
+   */
+  type GistContent,
+
   /**
    * Gist configuration tag
    * @since 0.1.0

@@ -121,6 +121,37 @@ claude-session-gists link-commit --gist <gist-url>
 
 > **Note:** By default, all commands scope to sessions from your current working directory. Use `--all` to see all projects or `--project` to filter by name.
 
+## Claude Code Integration
+
+### Search Sessions Slash Command
+
+The package includes a `/search-sessions` slash command for use within Claude Code conversations.
+
+**Usage in Claude Code:**
+
+```text
+/search-sessions <query>
+```
+
+**Examples:**
+
+```text
+/search-sessions error handling
+/search-sessions API design
+/search-sessions authentication
+```
+
+**What it does:**
+
+1. Searches your archived session gists for the query term
+2. Presents numbered results with dates, projects, commit info, and previews
+3. Offers three ways to load a session:
+   - **Load gist + git diff** - View session content plus code changes
+   - **Load full local session** - Access complete JSONL (if still exists locally)
+   - **Resume via /resume** - Get guided to resume the actual session
+
+This makes it easy to find and reference past design decisions and conversations directly from Claude Code.
+
 ## Example Workflow
 
 1. Work on a feature with Claude Code

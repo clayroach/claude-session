@@ -76,6 +76,41 @@ export interface GistResult {
  * @since 0.1.0
  * @category models
  */
+export interface GistListItem {
+  readonly id: string
+  readonly description: string
+  readonly isPublic: boolean
+  readonly files: ReadonlyArray<string>
+  readonly createdAt: Date
+  readonly updatedAt: Date
+}
+
+/**
+ * @since 0.1.0
+ * @category models
+ */
+export interface GistListOptions {
+  /** Maximum number of gists to return (default: 30) */
+  readonly limit?: number
+}
+
+/**
+ * @since 0.1.0
+ * @category models
+ */
+export interface GistContent {
+  readonly id: string
+  readonly description: string
+  readonly files: ReadonlyArray<{
+    readonly filename: string
+    readonly content: string
+  }>
+}
+
+/**
+ * @since 0.1.0
+ * @category models
+ */
 export interface GistConfigOptions {
   /** GitHub personal access token (optional if using gh CLI) */
   readonly token: Option.Option<string>
@@ -131,6 +166,20 @@ export class GistService extends Context.Tag("claude-session/GistService")<
     readonly update: (
       options: GistUpdateOptions
     ) => Effect.Effect<GistResult, GistError>
+
+    /**
+     * List user's gists
+     */
+    readonly list: (
+      options?: GistListOptions
+    ) => Effect.Effect<ReadonlyArray<GistListItem>, GistError>
+
+    /**
+     * Get a gist's full content
+     */
+    readonly get: (
+      gistId: string
+    ) => Effect.Effect<GistContent, GistError>
 
     /**
      * Check if GitHub authentication is available
@@ -236,6 +285,86 @@ const checkAuthViaCli = (): Effect.Effect<boolean, never, CommandExecutor.Comman
     )
 
     return exitCode === 0
+  })
+
+const listGistsViaCli = (
+  options?: GistListOptions
+): Effect.Effect<ReadonlyArray<GistListItem>, GistError, CommandExecutor.CommandExecutor | Scope.Scope> =>
+  Effect.gen(function* () {
+    const limit = options?.limit ?? 30
+    // gh gist list outputs tab-separated: ID, DESCRIPTION, FILES, VISIBILITY, UPDATED
+    const command = Command.make("gh", "gist", "list", "--limit", String(limit))
+
+    const output = yield* Command.string(command).pipe(
+      Effect.mapError((e) => new GistError({
+        reason: "CliError",
+        message: "Failed to list gists via gh CLI",
+        cause: e
+      }))
+    )
+
+    const lines = output.trim().split("\n").filter(line => line.length > 0)
+    const results: Array<GistListItem> = []
+
+    for (const line of lines) {
+      // Format: ID\tDESCRIPTION\tFILES\tVISIBILITY\tUPDATED
+      const parts = line.split("\t")
+      if (parts.length >= 5) {
+        const [id, description, filesStr, visibility, updated] = parts
+        const fileCount = parseInt(filesStr?.replace(/[^0-9]/g, "") ?? "0", 10)
+        results.push({
+          id: id ?? "",
+          description: description ?? "",
+          isPublic: visibility === "public",
+          files: Array(fileCount).fill("").map((_, i) => `file${i + 1}`), // We don't have filenames from list
+          createdAt: new Date(updated ?? ""), // List only shows updated, not created
+          updatedAt: new Date(updated ?? "")
+        })
+      }
+    }
+
+    return results
+  })
+
+const getGistViaCli = (
+  gistId: string
+): Effect.Effect<GistContent, GistError, CommandExecutor.CommandExecutor | Scope.Scope> =>
+  Effect.gen(function* () {
+    // Get the list of files in the gist
+    const filesCommand = Command.make("gh", "gist", "view", gistId, "--files")
+    const filesOutput = yield* Command.string(filesCommand).pipe(
+      Effect.mapError((e) => new GistError({
+        reason: "CliError",
+        message: `Failed to get gist files for ${gistId}`,
+        cause: e
+      }))
+    )
+
+    const filenames = filesOutput.trim().split("\n").filter(f => f.length > 0)
+    const files: Array<{ filename: string; content: string }> = []
+
+    // Fetch each file's content
+    for (const filename of filenames) {
+      const contentCommand = Command.make("gh", "gist", "view", gistId, "-f", filename, "--raw")
+      const content = yield* Command.string(contentCommand).pipe(
+        Effect.catchAll(() => Effect.succeed(""))
+      )
+      files.push({ filename, content })
+    }
+
+    // Try to extract description from the first file's content (metadata table)
+    let description = ""
+    const firstContent = files[0]?.content ?? ""
+    const descMatch = firstContent.match(/# Claude Code Session: (.+)/)
+    if (descMatch) {
+      description = `Claude Session: ${descMatch[1]}`
+    }
+
+    return {
+      id: gistId,
+      description,
+      files
+    }
   })
 
 // ============================================================================
@@ -519,6 +648,84 @@ export const GistServiceLive = Layer.effect(
           return yield* Effect.fail(new GistError({
             reason: "AuthError",
             message: "No authentication method available."
+          }))
+        }),
+
+      list: (options) =>
+        Effect.gen(function* () {
+          // CLI only for list (simpler implementation)
+          if (config.preferCli) {
+            const cliAuth = yield* Effect.serviceOption(CommandExecutor.CommandExecutor).pipe(
+              Effect.flatMap(executorOpt =>
+                Option.isSome(executorOpt)
+                  ? checkAuthViaCli().pipe(
+                      Effect.provide(Layer.succeed(CommandExecutor.CommandExecutor, Option.getOrThrow(executorOpt))),
+                      Effect.scoped
+                    )
+                  : Effect.succeed(false)
+              ),
+              Effect.catchAll(() => Effect.succeed(false))
+            )
+
+            if (cliAuth) {
+              return yield* Effect.serviceOption(CommandExecutor.CommandExecutor).pipe(
+                Effect.flatMap(executorOpt =>
+                  Option.isSome(executorOpt)
+                    ? listGistsViaCli(options).pipe(
+                        Effect.provide(Layer.succeed(CommandExecutor.CommandExecutor, Option.getOrThrow(executorOpt))),
+                        Effect.scoped
+                      )
+                    : Effect.fail(new GistError({
+                        reason: "CliError",
+                        message: "CommandExecutor not available"
+                      }))
+                )
+              )
+            }
+          }
+
+          return yield* Effect.fail(new GistError({
+            reason: "AuthError",
+            message: "List requires gh CLI authentication. Run 'gh auth login'."
+          }))
+        }),
+
+      get: (gistId) =>
+        Effect.gen(function* () {
+          // CLI only for get (simpler implementation)
+          if (config.preferCli) {
+            const cliAuth = yield* Effect.serviceOption(CommandExecutor.CommandExecutor).pipe(
+              Effect.flatMap(executorOpt =>
+                Option.isSome(executorOpt)
+                  ? checkAuthViaCli().pipe(
+                      Effect.provide(Layer.succeed(CommandExecutor.CommandExecutor, Option.getOrThrow(executorOpt))),
+                      Effect.scoped
+                    )
+                  : Effect.succeed(false)
+              ),
+              Effect.catchAll(() => Effect.succeed(false))
+            )
+
+            if (cliAuth) {
+              return yield* Effect.serviceOption(CommandExecutor.CommandExecutor).pipe(
+                Effect.flatMap(executorOpt =>
+                  Option.isSome(executorOpt)
+                    ? getGistViaCli(gistId).pipe(
+                        Effect.provide(Layer.succeed(CommandExecutor.CommandExecutor, Option.getOrThrow(executorOpt))),
+                        Effect.scoped
+                      )
+                    : Effect.fail(new GistError({
+                        reason: "CliError",
+                        message: "CommandExecutor not available"
+                      }))
+                )
+              )
+            }
+          }
+
+          return yield* Effect.fail(new GistError({
+            reason: "AuthError",
+            message: "Get requires gh CLI authentication. Run 'gh auth login'."
           }))
         }),
 
