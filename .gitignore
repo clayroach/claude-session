@@ -26,3 +26,6 @@ coverage/
 # Nix/direnv
 .direnv/
 result
+
+# Temp
+tmp/
