@@ -162,3 +162,47 @@ pnpm dev create --commit --since last-commit
 # Link current commit to a gist
 pnpm dev link-commit --gist <gist-url>
 ```
+
+## Slash Commands
+
+### /search-sessions
+
+Search archived Claude Code session gists by content. Located in `.claude/commands/search-sessions.md`.
+
+**Usage:**
+
+```text
+/search-sessions <query>
+```
+
+**How it works:**
+
+1. Lists user's gists via `gh gist list`
+2. Filters to Claude session gists (descriptions contain "Claude Code session:")
+3. Searches descriptions first for efficiency
+4. Fetches full content for promising matches
+5. Presents numbered results with date, project, commit SHA, and preview
+
+**After finding sessions:**
+
+When you select a session, Claude offers three load options:
+
+1. **Load Gist + Git Diff** - View session content plus code changes from the branch
+2. **Load Full Local Session** - Access the complete JSONL (if it still exists locally)
+3. **Resume via /resume** - Get guidance to resume the actual session in Claude Code
+
+**Session metadata:**
+
+Each gist includes:
+
+- Session ID in metadata table: `| **Session ID** | \`uuid\` |`
+- Commit info block with SHA, branch, and message (if linked)
+- Full conversation markdown
+
+**Examples:**
+
+```text
+/search-sessions error handling
+/search-sessions API design
+/search-sessions gists
+```
